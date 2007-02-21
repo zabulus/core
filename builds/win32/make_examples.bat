@@ -41,7 +41,7 @@
 :: Here we must use cd because isql does not have an option to set a base directory
 @cd %ROOT_PATH%\gen\v5_examples
 @del empbuild.fdb 2> nul
-@%FIREBIRD%\bin\isql -i empbld.sql
+@isql -i empbld.sql
 @cd %ROOT_PATH%\builds\win32
 
 @echo.
