@@ -122,10 +122,8 @@ namespace {
 		Firebird::string login;
 		int	failCount;
 		time_t lastAttempt;
-		FailedLogin(const Firebird::string& l) 
-			: login(l), failCount(1), lastAttempt(time(0)) {}
-		FailedLogin(Firebird::MemoryPool& p, const FailedLogin& fl) 
-			: login(p, fl.login), failCount(fl.failCount), lastAttempt(fl.lastAttempt) {}
+		FailedLogin(Firebird::MemoryPool& p) 
+			: login(p), failCount(0), lastAttempt(time(0)) {}
 		static const Firebird::string* generate(const void* sender, const FailedLogin* f)
 		{
 			return &(f->login);
@@ -154,30 +152,44 @@ namespace {
 
 		void loginFail(const Firebird::string& login)
 		{
-			Firebird::MutexLockGuard guard(fullAccess);
+			//Firebird::MutexLockGuard(fullAccess);
+			fullAccess.enter();
+			FailedLogin& l = get(login);
+			if (++l.failCount >= MAX_FAILED_ATTEMPTS)
+			{
+				sleepThread();
+				l.failCount = 0;
+			}
+			fullAccess.leave();
+		}
 
-			const time_t t = time(0);
-
+		void loginSuccess(const Firebird::string& login)
+		{
+			//Firebird::MutexLockGuard(fullAccess);
+			fullAccess.enter();
 			size_t pos;
 			if (find(login, pos))
 			{
-				FailedLogin& l = (*this)[pos];
-				if (t - l.lastAttempt >= FAILURE_DELAY)
+				remove(pos);
+			}
+			fullAccess.leave();
+		}
+
+	private:
+		FailedLogin& get(const Firebird::string& login)
 		{
-					l.failCount = 0;
-				}
-				l.lastAttempt = t;
-				if (++l.failCount >= MAX_FAILED_ATTEMPTS)
+			size_t pos;
+			if (find(login, pos))
 			{
-					l.failCount = 0;
-					DelayFailedLogin::raise(FAILURE_DELAY);
-				}
-				return;
+				(*this)[pos].lastAttempt = time(0);
+				return (*this)[pos];
 			}
 
+checkForFreeSpace:
 			if (getCount() >= MAX_CONCURRENT_FAILURES)
 			{
 				// try to perform old entries collection
+				const time_t t = time(0);
 				for (iterator i = begin(); i != end(); )
 				{
 					if (t - i->lastAttempt >= FAILURE_DELAY)
@@ -193,20 +205,23 @@ namespace {
 			if (getCount() >= MAX_CONCURRENT_FAILURES)
 			{
 				// it seems we are under attack - too many wrong logins !!!
-				DelayFailedLogin::raise(FAILURE_DELAY);
+				// therefore sleep for a while and clear failures cache
+				sleepThread();
+				goto checkForFreeSpace;
 			}
 
-			add(FailedLogin(login));
+			FailedLogin& rc = add();
+			rc.login = login;
+			return rc;
 		}
 
-		void loginSuccess(const Firebird::string& login)
+		void sleepThread()
 		{
-			Firebird::MutexLockGuard guard(fullAccess);
-			size_t pos;
-			if (find(login, pos))
-			{
-				remove(pos);
-			}
+			THREAD_EXIT();
+			fullAccess.leave();
+			THREAD_SLEEP(1000 * FAILURE_DELAY);
+			THREAD_ENTER();
+			fullAccess.enter();
 		}
 	};
 #else //SUPERSERVER
@@ -513,25 +528,3 @@ void SecurityDatabase::verifyUser(Firebird::string& name,
 	*node_id = 0;
 }
 
-void DelayFailedLogin::raise(int sec)
-{
-	throw DelayFailedLogin(sec);
-}
-
-ISC_STATUS DelayFailedLogin::stuff_exception(ISC_STATUS* const status_vector, Firebird::StringsBuffer*) const throw()
-{
-	ISC_STATUS *sv = status_vector;
-
-	*sv++ = isc_arg_gds;
-	*sv++ = isc_login;
-	*sv++ = isc_arg_end;
-
-	return status_vector[1];
-}
-
-void DelayFailedLogin::sleep() const
-{
-	THREAD_EXIT();
-	THREAD_SLEEP(1000 * seconds);
-	THREAD_ENTER();
-}
