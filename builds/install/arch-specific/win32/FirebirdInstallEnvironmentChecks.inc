@@ -495,7 +495,7 @@ procedure SetupSharedFilesArray;
 // - Files which are absolutely necessary for a functioning installation.
 //     Hence gbak and gfix are shared files, isql and qli are not
 // - Libraries
-// - License files 
+// - License files
 begin
 SetArrayLength(SharedFileArray,29);
 
@@ -592,10 +592,10 @@ end;
 function GetFirebirdDir: string;
 //Check if Firebird installed, get version info to global var and return root dir
 var
-	FirebirdDir: String;
+  FirebirdDir: String;
 begin
   FirebirdDir := '';
-	FirebirdVer := [0,0,0,0];
+  FirebirdVer := [0,0,0,0];
   RegQueryStringValue(HKEY_LOCAL_MACHINE,
     'SOFTWARE\Firebird Project\Firebird Server\Instances','DefaultInstance', FirebirdDir);
   //If nothing returned then check for the registry entry used during beta/RC phase
@@ -616,7 +616,7 @@ var
   InterBaseDir: String;
 begin
   InterBaseDir := '';
-	InterBaseVer   := [0,0,0,0];
+  InterBaseVer   := [0,0,0,0];
   RegQueryStringValue(HKEY_LOCAL_MACHINE,
     'SOFTWARE\Borland\InterBase\CurrentVersion','RootDirectory', InterBaseDir);
   if ( InterBaseDir <> '' ) then
