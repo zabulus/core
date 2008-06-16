@@ -103,7 +103,7 @@ Const
   FB30_x64_Install  = 16;
 
   MaxProdInstalled = FB30_x64_Install;
-  
+
 //ProductsInstalled
   IB4       = $00001;
   IB5       = $00002;
@@ -274,13 +274,11 @@ begin
       end;
 
       FB21_x64_Install: begin
-        if iswin64 then begin
-          ProductsInstalledArray[product].Description := FBDesc + ' (x64) ';
-          ProductsInstalledArray[product].RegKey := FB2RegKey;
-          ProductsInstalledArray[product].RegEntry := FBRegPathEntry;
-          ProductsInstalledArray[product].MessageFile := FBMessageFile;
-          ProductsInstalledArray[product].RootKey := HKLM64;
-        end;
+        ProductsInstalledArray[product].Description := FBDesc + ' (x64) ';
+        ProductsInstalledArray[product].RegKey := FB2RegKey;
+        ProductsInstalledArray[product].RegEntry := FBRegPathEntry;
+        ProductsInstalledArray[product].MessageFile := FBMessageFile;
+        ProductsInstalledArray[product].RootKey := HKLM64;
       end;
 
       FB25Install: begin
@@ -590,9 +588,9 @@ begin
                 ProductsInstalled := ProductsInstalled + FB21_x64;
                 ProductsInstalledCount := ProductsInstalledCount + 1;
               end
+            end
           else
             ProductsInstalledArray[product].InstallType := NotInstalled;
-          end;
         end;
 
         FB25Install: begin
@@ -606,13 +604,17 @@ begin
         end;
 
         FB25_x64_Install: begin
-          if (CompareVersion(ProductsInstalledArray[product].ClientVersion, '2.5.0.0',2) <> 0) then
-            ProductsInstalledArray[product].InstallType := NotInstalled
+          if iswin64 then begin
+            if (CompareVersion(ProductsInstalledArray[product].ClientVersion, '2.5.0.0',2) <> 0) then
+              ProductsInstalledArray[product].InstallType := NotInstalled
+            else
+              if ((ProductsInstalledArray[product].InstallType AND ClientInstall) = ClientInstall)  then begin
+                ProductsInstalled := ProductsInstalled + FB25_x64;
+                ProductsInstalledCount := ProductsInstalledCount + 1;
+              end
+            end
           else
-            if ((ProductsInstalledArray[product].InstallType AND ClientInstall) = ClientInstall)  then begin
-              ProductsInstalled := ProductsInstalled + FB25_x64;
-              ProductsInstalledCount := ProductsInstalledCount + 1;
-            end;
+            ProductsInstalledArray[product].InstallType := NotInstalled;
         end;
 
         FB30Install: begin
@@ -626,13 +628,17 @@ begin
         end;
 
         FB30_x64_Install: begin
-          if (CompareVersion(ProductsInstalledArray[product].ClientVersion, '3.0.0.0',2) <> 0) then
-            ProductsInstalledArray[product].InstallType := NotInstalled
+          if iswin64 then begin
+            if (CompareVersion(ProductsInstalledArray[product].ClientVersion, '3.0.0.0',2) <> 0) then
+              ProductsInstalledArray[product].InstallType := NotInstalled
+            else
+              if ((ProductsInstalledArray[product].InstallType AND ClientInstall) = ClientInstall)  then begin
+                ProductsInstalled := ProductsInstalled + FB30_x64;
+                ProductsInstalledCount := ProductsInstalledCount + 1;
+              end
+            end
           else
-            if ((ProductsInstalledArray[product].InstallType AND ClientInstall) = ClientInstall)  then begin
-              ProductsInstalled := ProductsInstalled + FB30_x64;
-              ProductsInstalledCount := ProductsInstalledCount + 1;
-            end;
+            ProductsInstalledArray[product].InstallType := NotInstalled;
         end;
 
       end;//case
@@ -837,33 +843,75 @@ begin
     result := true;
 end;
 
-//Detect any 1.5 or 2.0 server running with default ClassName or mutex
-function FirebirdDefaultServerRunning: String;
+
+//Detect server running with default ClassName or mutex
+var
+    RunningServerVerString: String;
+
+function FirebirdDefaultServerRunning: Boolean;
 var
   Handle: Integer;
   mutex_found: boolean;
+  mutexes: String;
 begin
-  result := '';
-  //Look for a running version of Firebird 1.5 or later
-  Handle := FindWindowByClassName('FB_Disabled');
-  if ( Handle = 0 ) then
-    Handle := FindWindowByClassName('FB_Server');
-  if ( Handle = 0 ) then
-    Handle := FindWindowByClassName('FB_Guard');
+  RunningServerVerString := '';
+  Result := false;
 
-  if (Handle > 0) then
-     result := '1.5'
-  else begin
-    mutex_found := CheckForMutexes('FirebirdGuardianMutex,FirebirdServerMutex');
-    if mutex_found then
-      result := '2.0'
-    else begin
-      mutex_found := CheckForMutexes('FirebirdGuardianMutexDefaultInstance,FirebirdServerMutexDefaultInstance');
-      if mutex_found then
-        result := '2.1'
-    end;
+  if FirebirdOneRunning then
+    RunningServerVerString := 'Firebird v1.0 / InterBase';
 
+  //Look for a valid window handle
+  if RunningServerVerString = '' then begin
+    //This is effectivley a test for Firebird running as an application.
+    //This is useful if Firebird is running without the guardian
+    //because prior to v2.0.4 there is no server mutex.
+    Handle := FindWindowByClassName('FB_Disabled');
+    if ( Handle = 0 ) then
+      Handle := FindWindowByClassName('FB_Server');
+    if ( Handle = 0 ) then
+      Handle := FindWindowByClassName('FB_Guard');
+
+    if (Handle > 0) then
+      RunningServerVerString := 'Firebird';
   end;
+
+  //Look for a firebird mutex
+  if RunningServerVerString = '' then begin
+    //General Notes on testing for mutexes:
+    // - Mutexes are case-sensitive.
+    // - Don't escape the slash in Global\, Local\ etc. (We don't currently use Local\)
+    //
+    // v2.0 notes
+    // - v2.0 prior to 2.0.4 does not create a FirebirdServerMutex mutex,
+    //   so server running without guardian is not detected.
+    // - v2.0.4 creates mutexes without the global prefix.
+    // - Later versions (if any) will use the prefix, so we will test for them anyway.
+    mutexes := 'Global\FirebirdGuardianMutex' + ',' +
+               'Global\FirebirdServerMutex' + ',' +
+               'FirebirdGuardianMutex' + ',' +
+               'FirebirdServerMutex';
+    mutex_found := CheckForMutexes(mutexes);
+
+    if mutex_found then
+      RunningServerVerString := 'Firebird';
+  end;
+
+  if RunningServerVerString = '' then begin
+      //v2.1.1 notes
+      // - v2.1.0 creates mutexes without the global prefix.
+      // - v2.1.1 and later should use the correct prefix.
+      mutexes := 'Global\FirebirdGuardianMutexDefaultInstance' + ',' +
+                 'Global\FirebirdServerMutexDefaultInstance' + ',' +
+                 'FirebirdGuardianMutexDefaultInstance' + ',' +
+                 'FirebirdServerMutexDefaultInstance';
+      mutex_found := CheckForMutexes(mutexes);
+
+      if mutex_found then
+        RunningServerVerString := 'v2.1'
+  end;
+
+  if RunningServerVerString <> '' then
+    Result := True;
 
 end;
 
