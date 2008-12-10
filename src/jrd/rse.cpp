@@ -721,9 +721,9 @@ static bool fetch_record(thread_db* tdbb, RecordSource* rsb, SSHORT n
 		return true;
 	}
 
-	// We have exhausted this stream, so close it; if there is
-	// another candidate record from the n-1 streams to the left,
-	// then reopen the stream and start again from the beginning.
+/* we have exhausted this stream, so close it; if there is
+   another candidate record from the n-1 streams to the left,
+   then reopen the stream and start again from the beginning */
 
 	while (true)
 	{

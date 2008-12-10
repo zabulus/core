@@ -2868,7 +2868,8 @@ OptimizerInnerJoin::OptimizerInnerJoin(MemoryPool& p, OptimizerBlk* opt, UCHAR*	
 		innerStream[i]->stream = streams[i + 1];
 	}
 
-	calculateCardinalities();
+	// Cardinalities are calculated in OPT_compile()
+	//calculateCardinalities();
 	calculateStreamInfo();
 }
 
@@ -2909,14 +2910,13 @@ void OptimizerInnerJoin::calculateCardinalities()
 	for (int i = 0; i < innerStreams.getCount(); i++) {		
 		CompilerScratch::csb_repeat* csb_tail = &csb->csb_rpt[innerStreams[i]->stream];
 		fb_assert(csb_tail);
-		if (!csb_tail->csb_cardinality) {
-			jrd_rel* relation = csb_tail->csb_relation;
-			fb_assert(relation);
-			const Format* format = CMP_format(tdbb, csb, (USHORT)innerStreams[i]->stream);
-			fb_assert(format);
-			csb_tail->csb_cardinality = OPT_getRelationCardinality(tdbb, relation, format);
-		}
+		jrd_rel* relation = csb_tail->csb_relation;
+		fb_assert(relation);
+		const Format* format = CMP_format(tdbb, csb, (USHORT)innerStreams[i]->stream);
+		fb_assert(format);
+		csb_tail->csb_cardinality = OPT_getRelationCardinality(tdbb, relation, format);
 	}
+
 }
 
 void OptimizerInnerJoin::calculateStreamInfo()
@@ -3120,13 +3120,8 @@ int OptimizerInnerJoin::findJoinOrder()
 		if (!innerStreams[i]->used) {
 			remainingStreams++;
 			if (innerStreams[i]->independent()) {
-				if (!optimizer->opt_best_count ||
-					innerStreams[i]->baseCost < optimizer->opt_best_cost)
-				{
-					optimizer->opt_streams[0].opt_best_stream = innerStreams[i]->stream;
-					optimizer->opt_best_count = 1;
-					optimizer->opt_best_cost = innerStreams[i]->baseCost;
-				}
+				optimizer->opt_streams[0].opt_best_stream = innerStreams[i]->stream;
+				optimizer->opt_best_count = 1;
 			}
 		}
 	}

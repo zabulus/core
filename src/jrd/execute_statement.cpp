@@ -271,29 +271,24 @@ rec_err:
 
 void ExecuteStatement::Close(thread_db* tdbb)
 {
-	jrd_tra* tra = tdbb->tdbb_transaction;
 	if (Statement) {
-		if (tra)
-			tra->tra_callback_count++;
+		tdbb->tdbb_transaction->tra_callback_count++;
 		THREAD_EXIT();
 		// for a while don't check for errors while freeing statement
 		isc_dsql_free_statement(0, &Statement, DSQL_drop);
 		THREAD_ENTER();
-		if (tra)
-			tra->tra_callback_count--;
+		tdbb->tdbb_transaction->tra_callback_count--;
 		Statement = 0;
 	}
-	if (tra) {	// if transaction is already missing, it's pool is also deleted
-		char* p = reinterpret_cast<char*>(Sqlda);
-		delete[] p;
-		delete[] Buffer;
-	}
+	char* p = reinterpret_cast<char*>(Sqlda);
+	delete[] p;
 	Sqlda = 0;
-	Buffer = 0;
 	if (Transaction) {
 		delete YValve::translate<YValve::Transaction>(&Transaction);
 		Transaction = 0;
 	}
+	delete[] Buffer;
+	Buffer = 0;
 }
 
 XSQLDA* ExecuteStatement::MakeSqlda(thread_db* tdbb, short n)
