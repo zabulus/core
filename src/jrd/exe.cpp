@@ -1588,7 +1588,8 @@ static void execute_procedure(thread_db* tdbb, jrd_nod* node)
 		Jrd::ContextPoolHolder context(tdbb, proc_request->req_pool);
 
 		jrd_tra* transaction = request->req_transaction;
-		const SLONG save_point_number = transaction->tra_save_point->sav_number;
+		const SLONG save_point_number = transaction->tra_save_point ?
+			transaction->tra_save_point->sav_number : 0;
 
 		proc_request->req_timestamp = request->req_timestamp;
 		EXE_start(tdbb, proc_request, transaction);
@@ -2730,8 +2731,6 @@ static jrd_nod* looper(thread_db* tdbb, jrd_req* request, jrd_nod* in_node)
 			BUGCHECK(168);		/* msg 168 looper: action not yet implemented */
 		}
 
-		request->adjustCallerStats();
-
 	}	// try
 	catch (const Firebird::Exception& ex) {
 
@@ -2782,6 +2781,8 @@ static jrd_nod* looper(thread_db* tdbb, jrd_req* request, jrd_nod* in_node)
 		}
 	}
 	} // while()
+
+	request->adjustCallerStats();
 
 	// If there is no node, assume we have finished processing the
 	// request unless we are in the middle of processing an

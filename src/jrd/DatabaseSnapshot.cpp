@@ -101,12 +101,6 @@ DatabaseSnapshot::SharedMemory::SharedMemory()
 }
 
 
-DatabaseSnapshot::SharedMemory::SharedMemory(MemoryPool& /*pool*/)
-{
-	new (this) SharedMemory;
-}
-
-
 DatabaseSnapshot::SharedMemory::~SharedMemory()
 {
 	ISC_STATUS_ARRAY statusVector;
@@ -149,14 +143,22 @@ void DatabaseSnapshot::SharedMemory::release()
 }
 
 
-UCHAR* DatabaseSnapshot::SharedMemory::readData(MemoryPool& pool, ULONG& resultSize)
+UCHAR* DatabaseSnapshot::SharedMemory::readData(thread_db* tdbb, MemoryPool& pool, ULONG& resultSize)
 {
+	fb_assert(tdbb);
+
+	const Database* const dbb = tdbb->getDatabase();
+	fb_assert(dbb);
+
 	DumpGuard guard(this);
+
+	ULONG self_dbb_offset = 0;	
 
 	// Garbage collect elements belonging to dead processes.
 	// This is done in two passes. First, we compact the data
 	// and calculate the total size of the resulting data.
-	// Second, we create a resulting buffer of the necessary size.
+	// Second, we create a resulting buffer of the necessary size
+	// and copy the data there, starting with our own dbb.
 
 	// First pass
 	for (ULONG offset = sizeof(Header); offset < base->used;)
@@ -165,6 +167,12 @@ UCHAR* DatabaseSnapshot::SharedMemory::readData(MemoryPool& pool, ULONG& resultS
 		const Element* const element = (Element*) ptr;
 		const ULONG length = sizeof(Element) + element->length;
 
+		if (element->processId == getpid() &&
+			element->localId == dbb->dbb_monitoring_id)
+		{
+			self_dbb_offset = offset;
+		}
+
 		if (ISC_check_process_existence(element->processId, 0, false))
 		{
 			resultSize += element->length;
@@ -172,25 +180,38 @@ UCHAR* DatabaseSnapshot::SharedMemory::readData(MemoryPool& pool, ULONG& resultS
 		}
 		else
 		{
-			memmove(ptr, ptr + length, base->used - offset + length);
+			fb_assert(base->used >= offset + length);
+			memmove(ptr, ptr + length, base->used - offset - length);
 			base->used -= length;
 		}
 	}
 
+	// Second pass
 	UCHAR* const buffer = FB_NEW(pool) UCHAR[resultSize];
 	UCHAR* bufferPtr(buffer);
 
-	// Second pass
+	fb_assert(self_dbb_offset);
+
+	UCHAR* const ptr = (UCHAR*) base + self_dbb_offset;
+	const Element* const element = (Element*) ptr;
+	memcpy(bufferPtr, ptr + sizeof(Element), element->length);
+	bufferPtr += element->length;
+
 	for (ULONG offset = sizeof(Header); offset < base->used;)
 	{
 		UCHAR* const ptr = (UCHAR*) base + offset;
 		const Element* const element = (Element*) ptr;
 		const ULONG length = sizeof(Element) + element->length;
 
-		memcpy(bufferPtr, ptr + sizeof(Element), element->length);
-		bufferPtr += element->length;
+		if (offset != self_dbb_offset)
+		{
+			memcpy(bufferPtr, ptr + sizeof(Element), element->length);
+			bufferPtr += element->length;
+		}
+
 		offset += length;
 	}
+
 	fb_assert(buffer + resultSize == bufferPtr);
 	return buffer;
 }
@@ -206,21 +227,7 @@ void DatabaseSnapshot::SharedMemory::writeData(thread_db* tdbb, ULONG length, co
 	DumpGuard guard(this);
 
 	// Remove old copies of our element, if any
-	for (ULONG offset = sizeof(Header); offset < base->used;)
-	{
-		UCHAR* const ptr = (UCHAR*) base + offset;
-		const Element* const element = (Element*) ptr;
-		const ULONG length = sizeof(Element) + element->length;
-
-		if (element->processId == getpid() &&
-			element->localId == dbb->dbb_monitoring_id)
-		{
-			memmove(ptr, ptr + length, base->used - offset);
-			base->used -= length;
-		}
-		else
-			offset += length;
-	}
+	doCleanup(dbb);
 
 	// Do we need to extend the allocated memory?
 	while (base->used + sizeof(Element) + length > base->allocated)
@@ -236,6 +243,43 @@ void DatabaseSnapshot::SharedMemory::writeData(thread_db* tdbb, ULONG length, co
 	element->length = length;
 	memcpy(ptr + sizeof(Element), buffer, length);
 	base->used += sizeof(Element) + length;
+}
+
+
+void DatabaseSnapshot::SharedMemory::cleanup(thread_db* tdbb)
+{
+	fb_assert(tdbb);
+
+	const Database* const dbb = tdbb->getDatabase();
+	fb_assert(dbb);
+
+	DumpGuard guard(this);
+
+	// Remove information about our dbb
+	doCleanup(dbb);
+}
+
+
+void DatabaseSnapshot::SharedMemory::doCleanup(const Database* dbb)
+{
+	for (ULONG offset = sizeof(Header); offset < base->used;)
+	{
+		UCHAR* const ptr = (UCHAR*) base + offset;
+		const Element* const element = (Element*) ptr;
+		const ULONG length = sizeof(Element) + element->length;
+
+		if (element->processId == getpid() &&
+			element->localId == dbb->dbb_monitoring_id)
+		{
+			fb_assert(base->used >= offset + length);
+			memmove(ptr, ptr + length, base->used - offset - length);
+			base->used -= length;
+		}
+		else
+		{
+			offset += length;
+		}
+	}
 }
 
 
@@ -302,7 +346,9 @@ void DatabaseSnapshot::SharedMemory::init(void* arg, SH_MEM_T* shmemData, bool i
 
 // DatabaseSnapshot class
 
-InitInstance<DatabaseSnapshot::SharedMemory> DatabaseSnapshot::dump;
+DatabaseSnapshot::SharedMemory* DatabaseSnapshot::dump = NULL;
+InitMutex<DatabaseSnapshot> DatabaseSnapshot::startup;
+
 
 DatabaseSnapshot* DatabaseSnapshot::create(thread_db* tdbb)
 {
@@ -320,6 +366,17 @@ DatabaseSnapshot* DatabaseSnapshot::create(thread_db* tdbb)
 	}
 
 	return transaction->tra_db_snapshot;
+}
+
+
+void DatabaseSnapshot::cleanup(thread_db* tdbb)
+{
+	SET_TDBB(tdbb);
+
+	if (dump)
+	{
+		dump->cleanup(tdbb);
+	}
 }
 
 
@@ -410,8 +467,9 @@ DatabaseSnapshot::DatabaseSnapshot(thread_db* tdbb, MemoryPool& pool)
 	dbb->dbb_ast_flags |= DBB_monitor_off;
 
 	// Read the shared memory
+	fb_assert(dump);
 	ULONG dataSize = 0;
-	AutoPtr<UCHAR, ArrayDelete<UCHAR> > data(dump().readData(pool, dataSize));
+	AutoPtr<UCHAR, ArrayDelete<UCHAR> > data(dump->readData(tdbb, pool, dataSize));
 	fb_assert(dataSize);
 
 	ClumpletReader reader(ClumpletReader::WideUnTagged, data, dataSize);
@@ -491,6 +549,8 @@ DatabaseSnapshot::DatabaseSnapshot(thread_db* tdbb, MemoryPool& pool)
 					putField(record, fid, reader, source == NULL);
 					fields_processed = true;
 				}
+
+				att_allowed = (dbb_allowed && !dbb_processed);
 			}
 			else if (rid == rel_mon_attachments) // special case for MON$ATTACHMENTS
 			{
@@ -664,7 +724,7 @@ void DatabaseSnapshot::putField(Record* record, int id, const Firebird::Clumplet
 
 			*p++ = isc_bpb_source_type;
 			*p++ = 2;
-			put_short(p, isc_blob_text);
+			put_vax_short(p, isc_blob_text);
 			p += 2;
 			*p++ = isc_bpb_source_interp;
 			*p++ = 1;
@@ -672,7 +732,7 @@ void DatabaseSnapshot::putField(Record* record, int id, const Firebird::Clumplet
 
 			*p++ = isc_bpb_target_type;
 			*p++ = 2;
-			put_short(p, isc_blob_text);
+			put_vax_short(p, isc_blob_text);
 			p += 2;
 			*p++ = isc_bpb_target_interp;
 			*p++ = 1;
@@ -816,7 +876,10 @@ void DatabaseSnapshot::dumpData(thread_db* tdbb)
 		}
 	}
 
-	dump().writeData(tdbb, writer.getBufferLength(), writer.getBuffer());
+	startup.init();
+
+	fb_assert(dump);
+	dump->writeData(tdbb, writer.getBufferLength(), writer.getBuffer());
 }
 
 

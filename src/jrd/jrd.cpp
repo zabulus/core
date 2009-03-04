@@ -1179,6 +1179,7 @@ ISC_STATUS GDS_ATTACH_DATABASE(ISC_STATUS*	user_status,
 
 	if (options.dpb_verify)
 	{
+		validateAccess(attachment);
 		if (!CCH_exclusive(tdbb, LCK_PW, WAIT_PERIOD)) {
 			ERR_post(isc_bad_dpb_content, isc_arg_gds, isc_cant_validate, isc_arg_end);
 		}
@@ -6398,9 +6399,11 @@ static void shutdown_database(Database* dbb, const bool release_pools)
 #endif
 	CMP_fini(tdbb);
 	CCH_fini(tdbb);
+
+	DatabaseSnapshot::cleanup(tdbb);
+
 	if (dbb->dbb_backup_manager)
 		dbb->dbb_backup_manager->shutdown(tdbb);
-	// FUN_fini(tdbb);
 
 	if (dbb->dbb_monitor_lock)
 		LCK_release(tdbb, dbb->dbb_monitor_lock);
