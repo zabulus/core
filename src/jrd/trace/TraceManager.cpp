@@ -74,7 +74,7 @@ bool TraceManager::check_result(const TracePlugin* plugin, const char* module, c
 		return false;
 	}
 
-	gds__log("Trace plugin %s returned error on call %s.\n\tError details: %s", 
+	gds__log("Trace plugin %s returned error on call %s. Error details: %s", 
 		module, function, errorStr);
 	return false;
 }
