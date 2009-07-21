@@ -701,7 +701,6 @@ ISC_STATUS	UTLD_parse_sqlda(
 			break;
 		case SQL_QUAD:
 			dtype = dtype_quad;
-			break;
 		}
 
 		USHORT align = type_alignments[dtype];
