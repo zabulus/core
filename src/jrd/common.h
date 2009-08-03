@@ -60,6 +60,17 @@
 #include <sys/param.h>
 #endif
 
+#ifdef HAVE_UNISTD_H
+// for _POSIX_THREADS test below
+#include <unistd.h>
+#endif
+
+#if defined(_POSIX_THREADS) && _POSIX_THREADS >= 200112L
+// above check is generally true. However, we use pthreads on some platforms
+// where _POSIX_THREADS is defined to "1" or not even defined at all!
+#define USE_POSIX_THREADS
+#endif
+
 #include "../include/fb_macros.h"
 #include "../include/fb_types.h"
 
@@ -145,6 +156,16 @@
 #define RISC_ALIGNMENT
 #endif // IA64
 
+#ifndef USE_POSIX_THREADS
+// force pthread detection on Linux for distros that do not provide
+// POSIX thread compatability
+#define USE_POSIX_THREADS
+#endif
+
+#ifdef S390X
+#define IMPLEMENTATION  isc_info_db_impl_linux_s390x	// 78
+#endif // S390X
+
 #endif /* LINUX */
 
 
@@ -226,6 +247,11 @@
 //#define KILLER_SIGNALS
 #define NO_NFS					/* no MTAB_OPEN or MTAB_CLOSE in isc_file.c */
 
+#ifndef USE_POSIX_THREADS
+// force pthread detection on FREEBSD
+#define USE_POSIX_THREADS
+#endif
+
 #endif /* FREEBSD */
 
 /*****************************************************
@@ -298,9 +324,13 @@ extern "C" int remove(const char* path);
    which is too large to fit in a long int. */
 #define QUADCONST(n) (n##LL)
 
-//#else /* SOLARIS */
-
-//#define BSD_UNIX
+#ifndef USE_POSIX_THREADS
+#if defined(_POSIX_THREADS) && _POSIX_THREADS >= 1L
+// Solaris 9 has _POSIX_THREADS = 1L
+// Solaris 10 has _POSIX_THREADS >= 200112L
+#define USE_POSIX_THREADS
+#endif
+#endif
 
 #endif // SOLARIS
 
@@ -341,6 +371,11 @@ extern "C" int remove(const char* path);
 //#define FB_DOUBLE_ALIGN    8
 #define IMPLEMENTATION  isc_info_db_impl_isc_hp_ux /* 31 */
 
+#if defined (__HP_aCC)
+// aCC error, __thread can be used only with C-like structs
+#undef HAVE___THREAD
+#endif
+
 #define IEEE
 #pragma OPT_LEVEL 1
 // 16-Apr-2002 HP10 in unistd.h Paul Beach
@@ -354,6 +389,12 @@ extern "C" int remove(const char* path);
 /* The following macro creates a quad-sized constant, possibly one
    which is too large to fit in a long int. */
 #define QUADCONST(n) (n##LL)
+
+#ifndef USE_POSIX_THREADS
+// HPUX v B.11.23 does not have _POSIX_THREADS defined, their implementation
+// is incomplete, but good enough for us
+#define USE_POSIX_THREADS
+#endif
 
 #define RISC_ALIGNMENT
 
