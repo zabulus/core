@@ -169,6 +169,9 @@ namespace
 
 	inline void validateHandle(thread_db* tdbb, Attachment* const attachment)
 	{
+		if (attachment == tdbb->getAttachment())
+			return;
+
 		if (!attachment->checkHandle() || !attachment->att_database->checkHandle())
 		{
 			status_exception::raise(Arg::Gds(isc_bad_db_handle));
@@ -215,8 +218,10 @@ namespace
 
 	inline void validateHandle(Service* service)
 	{
-		if (!service->checkHandle())
-			status_exception::raise(Arg::Gds(isc_bad_svc_handle));
+		if (service && service->checkHandle())
+			return;
+
+		status_exception::raise(Arg::Gds(isc_bad_svc_handle));
 	}
 
 	class AttachmentHolder
@@ -783,11 +788,53 @@ ISC_STATUS GDS_ATTACH_DATABASE(ISC_STATUS* user_status,
 	DatabaseOptions options;
 	bool invalid_client_SQL_dialect = false;
 	SecurityDatabase::InitHolder siHolder;
+	PathName file_name, expanded_name;
+	bool is_alias = false;
 
 	try
 	{
 		// Process database parameter block
 		options.get(dpb, dpb_length, invalid_client_SQL_dialect);
+
+		if (options.dpb_org_filename.hasData())
+			file_name = options.dpb_org_filename;
+		else
+		{
+			file_name = filename;
+
+			if (!options.dpb_utf8_filename)
+				ISC_systemToUtf8(file_name);
+
+			ISC_unescape(file_name);
+		}
+
+		ISC_utf8ToSystem(file_name);
+
+		// Resolve given alias name
+		is_alias = ResolveDatabaseAlias(file_name, expanded_name);
+		if (is_alias)
+		{
+			ISC_systemToUtf8(expanded_name);
+			ISC_unescape(expanded_name);
+			ISC_utf8ToSystem(expanded_name);
+			ISC_expand_filename(expanded_name, false);
+		}
+		else
+		{
+			expanded_name = filename;
+
+			if (!options.dpb_utf8_filename)
+				ISC_systemToUtf8(expanded_name);
+
+			ISC_unescape(expanded_name);
+			ISC_utf8ToSystem(expanded_name);
+		}
+
+		// Check to see if the database is truly local
+		if (ISC_check_if_remote(expanded_name, true)) 
+		{
+			return handle_error(user_status, isc_unavailable);
+		}
 
 		// Check for correct credentials supplied
 		getUserInfo(userId, options);
@@ -803,44 +850,6 @@ ISC_STATUS GDS_ATTACH_DATABASE(ISC_STATUS* user_status,
 	{
 		trace_failed_attach(NULL, filename, options, false, true);
 		return ex.stuff_exception(user_status);
-	}
-
-	PathName file_name;
-
-	if (options.dpb_org_filename.hasData())
-		file_name = options.dpb_org_filename;
-	else
-	{
-		file_name = filename;
-
-		if (!options.dpb_utf8_filename)
-			ISC_systemToUtf8(file_name);
-
-		ISC_unescape(file_name);
-	}
-
-	ISC_utf8ToSystem(file_name);
-
-	PathName expanded_name;
-
-	// Resolve given alias name
-	const bool is_alias = ResolveDatabaseAlias(file_name, expanded_name);
-	if (is_alias)
-	{
-		ISC_systemToUtf8(expanded_name);
-		ISC_unescape(expanded_name);
-		ISC_utf8ToSystem(expanded_name);
-		ISC_expand_filename(expanded_name, false);
-	}
-	else
-	{
-		expanded_name = filename;
-
-		if (!options.dpb_utf8_filename)
-			ISC_systemToUtf8(expanded_name);
-
-		ISC_unescape(expanded_name);
-		ISC_utf8ToSystem(expanded_name);
 	}
 
 	// Check database against conf file.
@@ -879,19 +888,6 @@ ISC_STATUS GDS_ATTACH_DATABASE(ISC_STATUS* user_status,
 	bool initing_security = false;
 
 	try {
-
-#ifndef NO_NFS
-	// Don't check nfs if single user
-	if (!options.dpb_single_user)
-#endif
-	{
-		// Check to see if the database is truly local or if it just looks
-		// that way
-
-		if (ISC_check_if_remote(expanded_name, true)) {
-			ERR_post(Arg::Gds(isc_unavailable));
-		}
-	}
 
 /* If database to be opened is security database, then only
    gsec or SecurityDatabase may open it. This protects from use
@@ -1815,6 +1811,8 @@ ISC_STATUS GDS_CREATE_DATABASE(ISC_STATUS* user_status,
 	UserId userId;
 	DatabaseOptions options;
 	SecurityDatabase::InitHolder siHolder;
+	PathName file_name, expanded_name;
+	bool is_alias = false;
 
 	try {
 		// Process database parameter block
@@ -1822,6 +1820,47 @@ ISC_STATUS GDS_CREATE_DATABASE(ISC_STATUS* user_status,
 		options.get(dpb, dpb_length, invalid_client_SQL_dialect);
 		if (!invalid_client_SQL_dialect && options.dpb_sql_dialect == 99) {
 			options.dpb_sql_dialect = 0;
+		}
+
+		if (options.dpb_org_filename.hasData())
+			file_name = options.dpb_org_filename;
+		else
+		{
+			file_name = filename;
+
+			if (!options.dpb_utf8_filename)
+				ISC_systemToUtf8(file_name);
+
+			ISC_unescape(file_name);
+		}
+
+		ISC_utf8ToSystem(file_name);
+
+		// Resolve given alias name
+		is_alias = ResolveDatabaseAlias(file_name, expanded_name);
+		if (is_alias)
+		{
+			ISC_systemToUtf8(expanded_name);
+			ISC_unescape(expanded_name);
+			ISC_utf8ToSystem(expanded_name);
+			ISC_expand_filename(expanded_name, false);
+		}
+		else
+		{
+			expanded_name = filename;
+
+			if (!options.dpb_utf8_filename)
+				ISC_systemToUtf8(expanded_name);
+
+			ISC_unescape(expanded_name);
+			ISC_utf8ToSystem(expanded_name);
+		}
+
+		// Check to see if the database is truly local or if it just looks
+		// that way
+		if (ISC_check_if_remote(expanded_name, true))
+		{
+			return handle_error(user_status, isc_unavailable);
 		}
 
 		// Check for correct credentials supplied
@@ -1838,44 +1877,6 @@ ISC_STATUS GDS_CREATE_DATABASE(ISC_STATUS* user_status,
 	{
 		trace_failed_attach(NULL, filename, options, true, true);
 		return ex.stuff_exception(user_status);
-	}
-
-	PathName file_name;
-
-	if (options.dpb_org_filename.hasData())
-		file_name = options.dpb_org_filename;
-	else
-	{
-		file_name = filename;
-
-		if (!options.dpb_utf8_filename)
-			ISC_systemToUtf8(file_name);
-
-		ISC_unescape(file_name);
-	}
-
-	ISC_utf8ToSystem(file_name);
-
-	PathName expanded_name;
-
-	// Resolve given alias name
-	const bool is_alias = ResolveDatabaseAlias(file_name, expanded_name);
-	if (is_alias)
-	{
-		ISC_systemToUtf8(expanded_name);
-		ISC_unescape(expanded_name);
-		ISC_utf8ToSystem(expanded_name);
-		ISC_expand_filename(expanded_name, false);
-	}
-	else
-	{
-		expanded_name = filename;
-
-		if (!options.dpb_utf8_filename)
-			ISC_systemToUtf8(expanded_name);
-
-		ISC_unescape(expanded_name);
-		ISC_utf8ToSystem(expanded_name);
 	}
 
 	// Check database against conf file.
@@ -1911,20 +1912,6 @@ ISC_STATUS GDS_CREATE_DATABASE(ISC_STATUS* user_status,
 	bool initing_security = false;
 
 	try {
-
-#ifndef NO_NFS
-	// Don't check nfs if single user
-	if (!options.dpb_single_user)
-#endif
-	{
-		// Check to see if the database is truly local or if it just looks
-		// that way
-
-		if (ISC_check_if_remote(expanded_name, true))
-		{
-			ERR_post(Arg::Gds(isc_unavailable));
-		}
-	}
 
 	if (options.dpb_key.hasData())
 	{
@@ -4786,7 +4773,10 @@ static ISC_STATUS handle_error(ISC_STATUS* user_status, ISC_STATUS code)
  *	"error" and abort.
  *
  **************************************/
-	ERR_build_status(user_status, Arg::Gds(code));
+ 	if (user_status)
+	{
+		ERR_build_status(user_status, Arg::Gds(code));
+	}
 
 	return code;
 }
