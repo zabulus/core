@@ -4057,6 +4057,45 @@ static dsc* low_up_case(thread_db* tdbb, const dsc* value, impure_value* impure,
 	}
 	else
 	{
+        if (value->isText())
+        {
+            ULONG len = BUFFER_TINY;
+            Firebird::HalfStaticArray<UCHAR, BUFFER_TINY> utf8_str;
+
+            for(;;)
+            {
+                try
+                {
+                    auto buff = utf8_str.getBuffer(len);
+                    len = (textType->*tt_str_to_case)(value->dsc_length, value->dsc_address, utf8_str.getCount(), buff);
+                    {
+                        dsc desc;
+
+                        desc.dsc_dtype = dtype_text;
+                        desc.dsc_length = len;
+                        desc.dsc_address = NULL;
+                        EVL_make_value(tdbb, &desc, impure);
+                    }
+
+                    ::memcpy_s(impure->vlu_desc.dsc_address, impure->vlu_desc.dsc_length, buff, len);
+
+                    break;
+                }
+                catch(const Firebird::status_exception &ex)
+                {
+                    if(*ex.value() == isc_string_truncation)
+                    {
+                        continue;
+                    }
+                    else
+                    {
+                        throw;
+                    }
+                }
+            }
+        }
+        else
+        {
 		VaryStr<32> temp;
 		USHORT ttype;
 		dsc desc;
@@ -4065,11 +4104,6 @@ static dsc* low_up_case(thread_db* tdbb, const dsc* value, impure_value* impure,
 		desc.dsc_dtype = dtype_text;
 		INTL_ASSIGN_TTYPE(&desc, ttype);
 		EVL_make_value(tdbb, &desc, impure);
-
-		if (value->isText())
-		{
-			impure->vlu_desc.dsc_length = (textType->*tt_str_to_case)(desc.dsc_length,
-				impure->vlu_desc.dsc_address, desc.dsc_length, impure->vlu_desc.dsc_address);
 		}
 	}
 
